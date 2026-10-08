@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environment and Secrets
+.env
+
+# Data & Database
+data/OpenAPIScripMaster.json
+data/*.tmp
+*.db
+*.sqlite3
+
+# Logs
+logs/
+*.log

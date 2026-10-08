@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NiftyTrades | Algorithmic NIFTY Options</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- Stale Feed Alert Banner -->
+  <div id="stale-feed-banner">
+    WARNING: Real-time feed is STALE. New entries are temporarily blocked.
+  </div>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="logo-badge">NIFTY</div>
+      <h1 class="brand-title">
+        NiftyTrades
+        <span class="strategy-badge">Clean Signals v4 (Pine Port)</span>
+      </h1>
+    </div>
+
+    <!-- Center Hero: Overall P&L -->
+    <div class="pnl-hero">
+      <div class="pnl-item">
+        <span class="pnl-label">Net Total P&amp;L</span>
+        <span id="total-pnl" class="pnl-value neutral">₹0.00</span>
+      </div>
+      <div class="pnl-divider"></div>
+      <div class="pnl-item">
+        <span class="pnl-label">Realised</span>
+        <span id="realised-pnl" class="pnl-value neutral" style="font-size: 15px;">₹0.00</span>
+      </div>
+      <div class="pnl-divider"></div>
+      <div class="pnl-item">
+        <span class="pnl-label">Unrealised</span>
+        <span id="unrealised-pnl" class="pnl-value neutral" style="font-size: 15px;">₹0.00</span>
+      </div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="controls-section">
+      <!-- Feed Health Dot & Latency -->
+      <div class="feed-indicator">
+        <div id="feed-status-dot" class="status-dot"></div>
+        <span id="feed-status-text">Connected</span>
+        <span id="latency-display" style="color: var(--text-muted); font-size: 11px;">(0ms)</span>
+      </div>
+
+      <!-- PAPER / LIVE Toggle -->
+      <div class="mode-toggle-container">
+        <button id="mode-paper-btn" class="mode-btn active paper">PAPER</button>
+        <button id="mode-live-btn" class="mode-btn">LIVE</button>
+      </div>
+
+      <!-- Kill Switch Button -->
+      <button id="kill-switch-btn" class="btn-kill-switch">
+        <span>KILL SWITCH</span>
+      </button>
+
+      <!-- Trade Drawer Button -->
+      <button id="drawer-toggle-btn" class="btn-drawer-toggle">Trades</button>
+    </div>
+  </header>
+
+  <!-- Main View -->
+  <main class="app-main">
+    <!-- Contract Bar -->
+    <div class="contract-bar">
+      <div class="contract-tabs">
+        <button id="btn-tab-ce" class="tab-btn ce active">
+          <span id="tab-ce-label">ATM CE</span>
+        </button>
+        <button id="btn-tab-pe" class="tab-btn pe">
+          <span id="tab-pe-label">ATM PE</span>
+        </button>
+      </div>
+
+      <div class="contract-meta">
+        <div class="meta-pill">Spot: <strong id="meta-spot-price">--</strong></div>
+        <div class="meta-pill">LTP: <strong id="meta-option-ltp">--</strong></div>
+        <div class="meta-pill">Bid: <strong id="meta-best-bid">--</strong></div>
+        <div class="meta-pill">Ask: <strong id="meta-best-ask">--</strong></div>
+        <div class="meta-pill">Lot: <strong id="meta-lot-size">65</strong></div>
+      </div>
+    </div>
+
+    <!-- Chart Container -->
+    <div class="chart-wrapper">
+      <div class="chart-legend">
+        <div class="legend-item"><div class="legend-line entry"></div> Entry</div>
+        <div class="legend-item"><div class="legend-line stop"></div> Stop Loss</div>
+        <div class="legend-item"><div class="legend-line target"></div> Target</div>
+      </div>
+      <div id="chart-container"></div>
+    </div>
+  </main>
+
+  <!-- Trade Log Drawer -->
+  <div id="trade-drawer" class="trade-drawer">
+    <div id="drawer-header" class="drawer-header">
+      <div class="drawer-title">
+        <span>Closed Trades &amp; Order Fills</span>
+        <span id="trade-count-badge" class="strategy-badge">0 Trades</span>
+      </div>
+      <span id="drawer-arrow">&#9650;</span>
+    </div>
+    <div class="drawer-content">
+      <table class="trade-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Contract</th>
+            <th>Type</th>
+            <th>Qty</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Gross P&amp;L</th>
+            <th>Charges</th>
+            <th>Net P&amp;L</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="trade-table-body">
+          <tr>
+            <td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">No closed trades yet today.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Live Mode Confirmation Modal -->
+  <div id="live-confirm-modal" class="modal-backdrop">
+    <div class="modal-box">
+      <h3 class="modal-title">Confirm Switch to LIVE Trading</h3>
+      <p class="modal-desc">
+        You are about to switch to <strong>LIVE execution</strong>. Real marketable limit orders will be sent to your Angel One account using real capital.
+        <br><br>
+        To confirm, type <strong>LIVE</strong> below:
+      </p>
+      <input type="text" id="live-confirm-input" class="modal-input" placeholder="Type LIVE to confirm" autocomplete="off">
+      <div class="modal-actions">
+        <button id="live-confirm-cancel" class="btn-secondary">Cancel</button>
+        <button id="live-confirm-submit" class="btn-danger">Switch to LIVE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/static/js/lightweight-charts.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
