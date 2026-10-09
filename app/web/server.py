@@ -218,6 +218,7 @@ async def lifespan(app: FastAPI):
                         to_date=to_str
                     )
                     system_state.candle_builder.load_historical_candles(str(tok), c_data)
+                    time.sleep(0.4)
                 except Exception as e:
                     logger.warning(f"Could not warm up token {tok}: {e}")
 
@@ -262,6 +263,7 @@ async def lifespan(app: FastAPI):
                                             to_date=to_str
                                         )
                                         system_state.candle_builder.load_historical_candles(n_tok, c_data)
+                                        time.sleep(0.4)
                                     except Exception as e:
                                         logger.warning(f"Could not warm up new strike token {n_tok}: {e}")
 

@@ -33,6 +33,15 @@ class AngelOneAdapter(BrokerAdapter):
         self._refresh_token: Optional[str] = None
         self._last_login_time: Optional[datetime] = None
         self._is_logged_in: bool = False
+        self._last_request_time: float = 0.0
+
+    def _throttle(self, min_interval: float = 0.4) -> None:
+        """Enforce minimum interval between Angel One REST API requests to comply with broker rate limits."""
+        now = time.time()
+        elapsed = now - self._last_request_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        self._last_request_time = time.time()
 
     def login(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Authenticate with Angel One SmartAPI using auto-generated TOTP."""
@@ -55,7 +64,8 @@ class AngelOneAdapter(BrokerAdapter):
                 clean_secret = self.totp_secret.replace(" ", "").strip().upper()
                 totp = pyotp.TOTP(clean_secret).now()
 
-                # 2. Instantiate SmartConnect
+                # 2. Instantiate SmartConnect and throttle login calls
+                self._throttle(min_interval=1.0)
                 self._smart_connect = SmartConnect(api_key=self.api_key)
 
                 # 3. Request session
@@ -80,9 +90,17 @@ class AngelOneAdapter(BrokerAdapter):
                 last_error = f"Login rejected: {err_msg} (ErrorCode: {err_code})"
                 logger.warning(f"Login attempt {attempt}/{max_retries} failed: {last_error}")
 
+                # If rate limit exceeded during session generation, back off longer
+                if "exceeding access rate" in str(err_msg).lower() or err_code in ("AB1004", "AB2001"):
+                    wait_time = 3.0 * attempt
+                    logger.warning(f"Angel One session rate limit triggered. Backing off {wait_time:.1f}s before retry...")
+                    time.sleep(wait_time)
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"Login attempt {attempt}/{max_retries} encountered exception: {e}")
+                if "exceeding access rate" in str(e).lower():
+                    time.sleep(3.0 * attempt)
 
             if attempt < max_retries:
                 time.sleep(retry_delay * attempt)
@@ -124,6 +142,7 @@ class AngelOneAdapter(BrokerAdapter):
         """Fetch real available margin / cash from Angel One RMS limit."""
         self.ensure_valid_session()
         try:
+            self._throttle(min_interval=0.4)
             resp = self._smart_connect.rmsLimit()
             if resp and resp.get("status") is True:
                 data = resp.get("data", {})
@@ -142,6 +161,7 @@ class AngelOneAdapter(BrokerAdapter):
         """Fetch current open positions from broker."""
         self.ensure_valid_session()
         try:
+            self._throttle(min_interval=0.4)
             resp = self._smart_connect.position()
             if resp and resp.get("status") is True:
                 return resp.get("data", []) or []
@@ -154,6 +174,7 @@ class AngelOneAdapter(BrokerAdapter):
         """Fetch order book from broker."""
         self.ensure_valid_session()
         try:
+            self._throttle(min_interval=0.4)
             resp = self._smart_connect.orderBook()
             if resp and resp.get("status") is True:
                 return resp.get("data", []) or []
@@ -169,7 +190,7 @@ class AngelOneAdapter(BrokerAdapter):
         interval: str,
         from_date: str,
         to_date: str,
-        max_retries: int = 3
+        max_retries: int = 4
     ) -> List[Dict[str, Any]]:
         """
         Fetch historical candle data from Angel One SmartAPI.
@@ -187,6 +208,7 @@ class AngelOneAdapter(BrokerAdapter):
 
         for attempt in range(1, max_retries + 1):
             try:
+                self._throttle(min_interval=0.4)
                 resp = self._smart_connect.getCandleData(param)
                 if resp and resp.get("status") is True:
                     raw_data = resp.get("data", [])
@@ -204,14 +226,31 @@ class AngelOneAdapter(BrokerAdapter):
                     return candles
 
                 err = resp.get("message", "Unknown error") if resp else "Empty response"
-                if "Access token is expired" in str(err) or resp.get("errorcode") == "AG8001":
+                err_lower = str(err).lower()
+                err_code = resp.get("errorcode", "") if resp else ""
+
+                if "exceeding access rate" in err_lower or "rate limit" in err_lower or err_code in ("AB1004", "AB2001"):
+                    wait_time = 1.5 * attempt
+                    logger.warning(
+                        f"Angel One rate limit exceeded for token {symbol_token} ({err}). "
+                        f"Backing off {wait_time:.1f}s before retry {attempt}/{max_retries}..."
+                    )
+                    time.sleep(wait_time)
+                elif "access token is expired" in err_lower or "invalid token" in err_lower:
                     logger.warning("Token expired during candle fetch. Re-authenticating...")
+                    time.sleep(1.0)
                     self.login()
                 else:
                     logger.warning(f"Candle fetch attempt {attempt} failed: {err}")
 
             except Exception as e:
-                logger.warning(f"Candle fetch attempt {attempt} exception: {e}")
+                err_lower = str(e).lower()
+                if "exceeding access rate" in err_lower or "rate limit" in err_lower:
+                    wait_time = 2.0 * attempt
+                    logger.warning(f"Angel One rate limit exception on token {symbol_token}: {e}. Backing off {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"Candle fetch attempt {attempt} exception: {e}")
 
             time.sleep(0.5 * attempt)
 
