@@ -3,7 +3,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
-from dhanhq import DhanContext, dhanhq
+import pyotp
+from dhanhq import DhanContext, dhanhq, DhanLogin
 from app.adapter.base import BrokerAdapter
 from app.config import settings
 from app.core.exceptions import AuthenticationError, HistoricalDataError, OrderExecutionError
@@ -17,24 +18,57 @@ class DhanAdapter(BrokerAdapter):
     def __init__(
         self,
         client_id: Optional[str] = None,
-        access_token: Optional[str] = None
+        access_token: Optional[str] = None,
+        pin: Optional[str] = None,
+        totp_secret: Optional[str] = None,
     ):
         self.client_id = client_id or settings.DHAN_CLIENT_ID
         self.access_token = access_token or settings.DHAN_ACCESS_TOKEN
+        self.pin = pin or settings.DHAN_PIN
+        self.totp_secret = totp_secret or settings.DHAN_TOTP_SECRET
         self._context: Optional[DhanContext] = None
         self._client: Optional[dhanhq] = None
         self._is_logged_in: bool = False
         self._last_login_time: Optional[datetime] = None
 
+    def _generate_access_token_via_totp(self) -> Optional[str]:
+        """Automatically generate fresh 24-hour Dhan access token using PIN and TOTP."""
+        if not self.client_id or not self.pin or not self.totp_secret:
+            return None
+        try:
+            totp_code = pyotp.TOTP(self.totp_secret.strip()).now()
+            logger.info("Attempting automated DhanHQ login with PIN & TOTP...")
+            dhan_login = DhanLogin(self.client_id.strip())
+            resp = dhan_login.generate_token(self.pin.strip(), totp_code)
+
+            token = None
+            if isinstance(resp, dict):
+                token = resp.get("accessToken") or resp.get("data", {}).get("accessToken")
+
+            if token:
+                logger.info("Automated DhanHQ token generation succeeded! New 24-hour token acquired.")
+                self.access_token = token
+                return token
+            else:
+                logger.warning(f"DhanHQ TOTP login returned unexpected response: {resp}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to generate DhanHQ token via PIN/TOTP: {e}")
+            return None
+
     def login(self, max_retries: int = 3, retry_delay: float = 1.0) -> bool:
-        """Authenticate with DhanHQ using client ID and permanent access token."""
-        if not self.client_id or not self.access_token:
-            missing = []
-            if not self.client_id: missing.append("DHAN_CLIENT_ID")
-            if not self.access_token: missing.append("DHAN_ACCESS_TOKEN")
-            raise AuthenticationError(
-                f"Missing required Dhan credentials in configuration: {', '.join(missing)}"
-            )
+        """Authenticate with DhanHQ. Supports one-time automated PIN+TOTP or existing access token."""
+        if not self.client_id:
+            raise AuthenticationError("Missing required DHAN_CLIENT_ID in configuration.")
+
+        if not self.access_token:
+            if self.pin and self.totp_secret:
+                self._generate_access_token_via_totp()
+
+            if not self.access_token:
+                raise AuthenticationError(
+                    "Missing Dhan credentials: provide either DHAN_ACCESS_TOKEN or (DHAN_PIN and DHAN_TOTP_SECRET) in .env"
+                )
 
         logger.info(f"Authenticating with DhanHQ for Client ID: {self.client_id}...")
 
@@ -55,11 +89,23 @@ class DhanAdapter(BrokerAdapter):
                     logger.info("DhanHQ authentication successful! Session active.")
                     return True
 
+                # If token was rejected/expired and we have PIN + TOTP, refresh automatically
+                if attempt == 1 and self.pin and self.totp_secret:
+                    logger.info("Dhan token invalid or expired. Generating fresh token via TOTP...")
+                    new_token = self._generate_access_token_via_totp()
+                    if new_token:
+                        continue
+
                 err_msg = resp.get("remarks") or resp.get("message") or str(resp) if isinstance(resp, dict) else str(resp)
                 last_error = f"Dhan auth rejected: {err_msg}"
                 logger.warning(f"Dhan login attempt {attempt}/{max_retries} failed: {last_error}")
 
             except Exception as e:
+                if attempt == 1 and self.pin and self.totp_secret:
+                    logger.info("Dhan auth exception encountered. Attempting fresh TOTP login...")
+                    new_token = self._generate_access_token_via_totp()
+                    if new_token:
+                        continue
                 last_error = str(e)
                 logger.warning(f"Dhan login attempt {attempt}/{max_retries} encountered exception: {e}")
 
@@ -70,8 +116,15 @@ class DhanAdapter(BrokerAdapter):
         raise AuthenticationError(f"Failed to authenticate with DhanHQ after {max_retries} attempts: {last_error}")
 
     def is_logged_in(self) -> bool:
-        """Dhan tokens are valid for up to 30 days without daily expiration."""
-        return self._is_logged_in and self._client is not None
+        """Dhan tokens are valid for up to 24 hours."""
+        if not self._is_logged_in or self._client is None:
+            return False
+        if self._last_login_time:
+            # Consider token stale after 23 hours to trigger automated refresh before hard expiry
+            elapsed_hours = (datetime.now(tz=IST) - self._last_login_time).total_seconds() / 3600.0
+            if elapsed_hours >= 23.0:
+                return False
+        return True
 
     def get_feed_token(self) -> Optional[str]:
         """Return access token for WebSocket streaming."""

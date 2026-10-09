@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     # DHAN SECRETS (Never log or expose)
     # -------------------------------------------------------------------------
     DHAN_CLIENT_ID: str = Field(default="", description="Dhan Client ID")
-    DHAN_ACCESS_TOKEN: str = Field(default="", description="Dhan 30-day Access Token")
+    DHAN_ACCESS_TOKEN: str = Field(default="", description="Dhan Access Token (Optional if PIN + TOTP provided)")
+    DHAN_PIN: str = Field(default="", description="Dhan 6-digit Login PIN")
+    DHAN_TOTP_SECRET: str = Field(default="", description="Dhan Authenticator Base32 TOTP Secret Key")
 
     # -------------------------------------------------------------------------
     # ANGEL ONE SECRETS (Never log or expose)

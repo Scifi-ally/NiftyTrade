@@ -23,6 +23,35 @@ def test_dhan_adapter_mock_login_success():
         assert adapter.is_logged_in() is True
         assert adapter.get_funds() == 250000.0
 
+def test_dhan_adapter_totp_auto_login_success():
+    adapter = DhanAdapter(
+        client_id="1000000000",
+        access_token="",
+        pin="123456",
+        totp_secret="JBSWY3DPEHPK3PXP"
+    )
+    with patch("app.adapter.dhan.DhanLogin") as mock_login_cls, \
+         patch("app.adapter.dhan.dhanhq") as mock_dhan_cls:
+        
+        mock_login_inst = MagicMock()
+        mock_login_inst.generate_token.return_value = {
+            "status": "success",
+            "accessToken": "auto_generated_jwt_token_123"
+        }
+        mock_login_cls.return_value = mock_login_inst
+
+        mock_dhan_inst = MagicMock()
+        mock_dhan_inst.get_fund_limits.return_value = {
+            "status": "success",
+            "data": {"availabelBalance": 180000.0}
+        }
+        mock_dhan_cls.return_value = mock_dhan_inst
+
+        assert adapter.login() is True
+        assert adapter.access_token == "auto_generated_jwt_token_123"
+        assert adapter.is_logged_in() is True
+        assert adapter.get_funds() == 180000.0
+
 def test_dhan_adapter_get_candles_parsing():
     adapter = DhanAdapter(client_id="1000000000", access_token="mock_token_abc")
     adapter._is_logged_in = True
