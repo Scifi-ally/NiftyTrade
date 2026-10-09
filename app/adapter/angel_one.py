@@ -35,7 +35,7 @@ class AngelOneAdapter(BrokerAdapter):
         self._is_logged_in: bool = False
         self._last_request_time: float = 0.0
 
-    def _throttle(self, min_interval: float = 0.4) -> None:
+    def _throttle(self, min_interval: float = 1.0) -> None:
         """Enforce minimum interval between Angel One REST API requests to comply with broker rate limits."""
         now = time.time()
         elapsed = now - self._last_request_time

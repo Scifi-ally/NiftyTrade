@@ -2,6 +2,7 @@
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 from zoneinfo import ZoneInfo
 import pyotp
 from dhanhq import DhanContext, dhanhq, DhanLogin
@@ -11,6 +12,7 @@ from app.core.exceptions import AuthenticationError, HistoricalDataError, OrderE
 from app.core.logging import logger
 
 IST = ZoneInfo("Asia/Kolkata")
+CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".dhan_token"
 
 class DhanAdapter(BrokerAdapter):
     """Adapter for DhanHQ API v2 providing high rate limits and low-latency execution."""
@@ -22,14 +24,38 @@ class DhanAdapter(BrokerAdapter):
         pin: Optional[str] = None,
         totp_secret: Optional[str] = None,
     ):
-        self.client_id = client_id or settings.DHAN_CLIENT_ID
-        self.access_token = access_token or settings.DHAN_ACCESS_TOKEN
-        self.pin = pin or settings.DHAN_PIN
-        self.totp_secret = totp_secret or settings.DHAN_TOTP_SECRET
+        self.client_id = client_id if client_id is not None else settings.DHAN_CLIENT_ID
+        self.pin = pin if pin is not None else settings.DHAN_PIN
+        self.totp_secret = totp_secret if totp_secret is not None else settings.DHAN_TOTP_SECRET
+        if access_token is not None:
+            self.access_token = access_token
+        else:
+            self.access_token = settings.DHAN_ACCESS_TOKEN or self._load_cached_token() or ""
         self._context: Optional[DhanContext] = None
         self._client: Optional[dhanhq] = None
         self._is_logged_in: bool = False
         self._last_login_time: Optional[datetime] = None
+
+    def _load_cached_token(self) -> Optional[str]:
+        """Load locally cached token if less than 23 hours old."""
+        if not CACHE_FILE.exists():
+            return None
+        try:
+            content = CACHE_FILE.read_text(encoding="utf-8").strip()
+            if content:
+                mtime = CACHE_FILE.stat().st_mtime
+                if (time.time() - mtime) < 23 * 3600:
+                    return content
+        except Exception:
+            pass
+        return None
+
+    def _save_cached_token(self, token: str) -> None:
+        """Cache active access token locally to prevent unnecessary TOTP requests."""
+        try:
+            CACHE_FILE.write_text(token.strip(), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not cache Dhan token to file: {e}")
 
     def _generate_access_token_via_totp(self) -> Optional[str]:
         """Automatically generate fresh 24-hour Dhan access token using PIN and TOTP."""
@@ -48,10 +74,19 @@ class DhanAdapter(BrokerAdapter):
             if token:
                 logger.info("Automated DhanHQ token generation succeeded! New 24-hour token acquired.")
                 self.access_token = token
+                self._save_cached_token(token)
                 return token
-            else:
-                logger.warning(f"DhanHQ TOTP login returned unexpected response: {resp}")
-                return None
+            elif isinstance(resp, dict) and "once every 2 minutes" in resp.get("message", ""):
+                cached = self._load_cached_token()
+                if cached:
+                    logger.info("Using recently generated cached Dhan token.")
+                    self.access_token = cached
+                    return cached
+            logger.warning(f"DhanHQ TOTP login returned unexpected response: {resp}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to generate DhanHQ token via PIN/TOTP: {e}")
+            return None
         except Exception as e:
             logger.error(f"Failed to generate DhanHQ token via PIN/TOTP: {e}")
             return None
@@ -224,40 +259,48 @@ class DhanAdapter(BrokerAdapter):
                 )
 
                 if isinstance(resp, dict):
-                    data = resp.get("data", resp)
-                    # Dhan returns dictionary of parallel arrays: open, high, low, close, volume, start_Time / timestamp
-                    opens = data.get("open", [])
-                    highs = data.get("high", [])
-                    lows = data.get("low", [])
-                    closes = data.get("close", [])
-                    vols = data.get("volume", [])
-                    times = data.get("start_Time") or data.get("timestamp") or []
+                    remarks = resp.get("remarks")
+                    if isinstance(remarks, dict) and remarks.get("error_code") == "DH-902":
+                        err_msg = remarks.get("error_message", "Historical Data requires DhanHQ PLUS subscription")
+                        logger.warning(f"Dhan historical data unavailable: {err_msg}")
+                        raise HistoricalDataError(err_msg)
 
-                    if opens and closes and len(opens) == len(closes):
-                        candles = []
-                        for i in range(len(opens)):
-                            ts_val = times[i] if i < len(times) else i
-                            if isinstance(ts_val, (int, float)):
-                                # Dhan timestamps can be epoch seconds
-                                try:
-                                    ts_str = datetime.fromtimestamp(ts_val, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
-                                except Exception:
+                    data = resp.get("data")
+                    if isinstance(data, dict):
+                        # Dhan returns dictionary of parallel arrays: open, high, low, close, volume, start_Time / timestamp
+                        opens = data.get("open", [])
+                        highs = data.get("high", [])
+                        lows = data.get("low", [])
+                        closes = data.get("close", [])
+                        vols = data.get("volume", [])
+                        times = data.get("start_Time") or data.get("timestamp") or []
+
+                        if opens and closes and len(opens) == len(closes):
+                            candles = []
+                            for i in range(len(opens)):
+                                ts_val = times[i] if i < len(times) else i
+                                if isinstance(ts_val, (int, float)):
+                                    try:
+                                        ts_str = datetime.fromtimestamp(ts_val, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
+                                    except Exception:
+                                        ts_str = str(ts_val)
+                                else:
                                     ts_str = str(ts_val)
-                            else:
-                                ts_str = str(ts_val)
 
-                            candles.append({
-                                "timestamp": ts_str,
-                                "open": float(opens[i]),
-                                "high": float(highs[i]),
-                                "low": float(lows[i]),
-                                "close": float(closes[i]),
-                                "volume": float(vols[i]) if i < len(vols) else 0.0
-                            })
-                        return candles
+                                candles.append({
+                                    "timestamp": ts_str,
+                                    "open": float(opens[i]),
+                                    "high": float(highs[i]),
+                                    "low": float(lows[i]),
+                                    "close": float(closes[i]),
+                                    "volume": float(vols[i]) if i < len(vols) else 0.0
+                                })
+                            return candles
 
                 logger.warning(f"Dhan candle fetch attempt {attempt} returned non-standard data: {resp}")
 
+            except HistoricalDataError:
+                raise
             except Exception as e:
                 logger.warning(f"Dhan candle fetch attempt {attempt} encountered exception: {e}")
 

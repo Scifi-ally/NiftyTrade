@@ -92,14 +92,14 @@ async def lifespan(app: FastAPI):
         if settings.BROKER == "DHAN":
             from app.adapter.dhan import DhanAdapter
             system_state.adapter = DhanAdapter()
-            if settings.DHAN_CLIENT_ID and settings.DHAN_ACCESS_TOKEN:
+            if settings.DHAN_CLIENT_ID and (settings.DHAN_ACCESS_TOKEN or (settings.DHAN_PIN and settings.DHAN_TOTP_SECRET) or system_state.adapter.access_token):
                 try:
                     system_state.adapter.login()
                     logger.info("DhanHQ broker session active.")
                 except Exception as e:
                     logger.error(f"DhanHQ login failed: {e}. System running in stand-by.")
             else:
-                logger.warning("No Dhan credentials found in .env; please configure DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN.")
+                logger.warning("No Dhan credentials found in .env; please configure DHAN_CLIENT_ID and DHAN_PIN + DHAN_TOTP_SECRET.")
         else:
             system_state.adapter = AngelOneAdapter()
             if settings.ANGEL_API_KEY and settings.ANGEL_CLIENT_CODE:
