@@ -88,21 +88,35 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing NiftyTrades Automated Trading System...")
     relogin_task = None
     try:
-        # 1. Initialize Adapter
-        system_state.adapter = AngelOneAdapter()
-        if settings.ANGEL_API_KEY and settings.ANGEL_CLIENT_CODE:
-            try:
-                system_state.adapter.login()
-                logger.info("Angel One broker session active.")
-            except Exception as e:
-                logger.error(f"Login failed on startup: {e}. System running in stand-by.")
+        # 1. Initialize Adapter based on BROKER setting
+        if settings.BROKER == "DHAN":
+            from app.adapter.dhan import DhanAdapter
+            system_state.adapter = DhanAdapter()
+            if settings.DHAN_CLIENT_ID and settings.DHAN_ACCESS_TOKEN:
+                try:
+                    system_state.adapter.login()
+                    logger.info("DhanHQ broker session active.")
+                except Exception as e:
+                    logger.error(f"DhanHQ login failed: {e}. System running in stand-by.")
+            else:
+                logger.warning("No Dhan credentials found in .env; please configure DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN.")
         else:
-            logger.warning("No credentials found in .env; please configure .env.")
+            system_state.adapter = AngelOneAdapter()
+            if settings.ANGEL_API_KEY and settings.ANGEL_CLIENT_CODE:
+                try:
+                    system_state.adapter.login()
+                    logger.info("Angel One broker session active.")
+                except Exception as e:
+                    logger.error(f"Login failed on startup: {e}. System running in stand-by.")
+            else:
+                logger.warning("No Angel One credentials found in .env; please configure .env.")
 
         # 2. Scrip Master & Contract Resolution
         scrip_master.load()
         system_state.nifty_spot_info = scrip_master.get_nifty_index()
         nearest_expiry = scrip_master.get_nearest_expiry()
+        spot_exch = system_state.nifty_spot_info.get("exch_seg", "NSE")
+        opt_exch = "NSE_FNO" if settings.BROKER == "DHAN" else "NFO"
 
         if settings.CONTRACT_MODE == "fixed" and settings.FIXED_STRIKE > 0:
             fixed_opt = scrip_master.get_fixed_option(
@@ -127,7 +141,7 @@ async def lifespan(app: FastAPI):
                     from_dt_str = (now_dt - timedelta(days=5)).strftime("%Y-%m-%d 09:15")
                     to_dt_str = now_dt.strftime("%Y-%m-%d 15:30")
                     candles = system_state.adapter.get_candles(
-                        exchange="NSE",
+                        exchange=spot_exch,
                         symbol_token=system_state.nifty_spot_info["token"],
                         interval="FIVE_MINUTE",
                         from_date=from_dt_str,
@@ -187,11 +201,11 @@ async def lifespan(app: FastAPI):
         system_state.state_machine.adapter = system_state.adapter
 
         # 4. Historical Warm-up (200 bars)
-        tokens_to_warm = [("NSE", system_state.nifty_spot_info["token"])]
+        tokens_to_warm = [(spot_exch, system_state.nifty_spot_info["token"])]
         if system_state.atm_ce_info:
-            tokens_to_warm.append(("NFO", system_state.atm_ce_info["token"]))
+            tokens_to_warm.append((opt_exch, system_state.atm_ce_info["token"]))
         if system_state.atm_pe_info:
-            tokens_to_warm.append(("NFO", system_state.atm_pe_info["token"]))
+            tokens_to_warm.append((opt_exch, system_state.atm_pe_info["token"]))
 
         INTERVAL_MAP = {
             1: "ONE_MINUTE",
@@ -256,7 +270,7 @@ async def lifespan(app: FastAPI):
                                 if system_state.adapter and system_state.adapter.is_logged_in():
                                     try:
                                         c_data = system_state.adapter.get_candles(
-                                            exchange="NFO",
+                                            exchange=opt_exch,
                                             symbol_token=n_tok,
                                             interval=candle_interval,
                                             from_date=from_str,
@@ -274,7 +288,7 @@ async def lifespan(app: FastAPI):
 
                         if system_state.tick_stream:
                             system_state.tick_stream.subscribe([
-                                {"exchangeType": 1, "tokens": [str(system_state.nifty_spot_info["token"])]},
+                                {"exchangeType": system_state.nifty_spot_info.get("exchange_type", 1), "tokens": [str(system_state.nifty_spot_info["token"])]},
                                 {"exchangeType": 2, "tokens": list(set(all_sub_tokens))}
                             ])
 
@@ -302,7 +316,7 @@ async def lifespan(app: FastAPI):
             to_str = now_dt.strftime("%Y-%m-%d 15:30")
             for sub in subscribed_tokens:
                 exch_type = sub.get("exchangeType", 2)
-                exch_code = "NSE" if exch_type == 1 else "NFO"
+                exch_code = spot_exch if exch_type in (0, 1) else opt_exch
                 for tok in sub.get("tokens", []):
                     try:
                         c_data = system_state.adapter.get_candles(
@@ -437,6 +451,7 @@ def get_system_status():
             pass
 
     return {
+        "broker": settings.BROKER,
         "execution_mode": system_state.state_machine.execution_mode if system_state.state_machine else "PAPER",
         "is_kill_switch_active": system_state.state_machine.is_kill_switch_active if system_state.state_machine else False,
         "feed_connected": stats.get("is_connected", False),

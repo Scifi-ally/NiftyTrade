@@ -16,6 +16,20 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
+    # BROKER SELECTION
+    # -------------------------------------------------------------------------
+    BROKER: Literal["DHAN", "ANGEL_ONE"] = Field(
+        default="DHAN",
+        description="Active broker: 'DHAN' or 'ANGEL_ONE'"
+    )
+
+    # -------------------------------------------------------------------------
+    # DHAN SECRETS (Never log or expose)
+    # -------------------------------------------------------------------------
+    DHAN_CLIENT_ID: str = Field(default="", description="Dhan Client ID")
+    DHAN_ACCESS_TOKEN: str = Field(default="", description="Dhan 30-day Access Token")
+
+    # -------------------------------------------------------------------------
     # ANGEL ONE SECRETS (Never log or expose)
     # -------------------------------------------------------------------------
     ANGEL_API_KEY: str = Field(default="", description="Angel One SmartAPI Application Key")
@@ -104,7 +118,7 @@ class Settings(BaseSettings):
     def validate_symbol_strictly(self, symbol: str) -> None:
         """Reject any symbol other than NIFTY index or NIFTY options."""
         clean = symbol.strip().upper()
-        if clean in ("NIFTY", "NIFTY 50", "NSE:NIFTY", "99926000", "26000"):
+        if clean in ("NIFTY", "NIFTY 50", "NSE:NIFTY", "99926000", "26000", "13"):
             return
         if clean.startswith("NIFTY") and (clean.endswith("CE") or clean.endswith("PE")):
             return
