@@ -3,154 +3,170 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NiftyTrades | Algorithmic NIFTY Options</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <title>NiftyTrades | Clean Signals v4</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist-mono@latest/index.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist@latest/index.css">
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 
-  <!-- Stale Feed Alert Banner -->
-  <div id="stale-feed-banner">
-    WARNING: Real-time feed is STALE. New entries are temporarily blocked.
-  </div>
-
-  <!-- Header -->
-  <header class="app-header">
-    <div class="brand-section">
-      <div class="logo-badge">NIFTY</div>
-      <h1 class="brand-title">
-        NiftyTrades
-        <span class="strategy-badge">Clean Signals v4 (Pine Port)</span>
-      </h1>
-    </div>
-
-    <!-- Center Hero: Overall P&L -->
-    <div class="pnl-hero">
-      <div class="pnl-item">
-        <span class="pnl-label">Net Total P&amp;L</span>
-        <span id="total-pnl" class="pnl-value neutral">₹0.00</span>
-      </div>
-      <div class="pnl-divider"></div>
-      <div class="pnl-item">
-        <span class="pnl-label">Realised</span>
-        <span id="realised-pnl" class="pnl-value neutral" style="font-size: 15px;">₹0.00</span>
-      </div>
-      <div class="pnl-divider"></div>
-      <div class="pnl-item">
-        <span class="pnl-label">Unrealised</span>
-        <span id="unrealised-pnl" class="pnl-value neutral" style="font-size: 15px;">₹0.00</span>
-      </div>
-    </div>
-
-    <!-- Right Controls -->
-    <div class="controls-section">
-      <!-- Feed Health Dot & Latency -->
-      <div class="feed-indicator">
-        <div id="feed-status-dot" class="status-dot"></div>
-        <span id="feed-status-text">Connected</span>
-        <span id="latency-display" style="color: var(--text-muted); font-size: 11px;">(0ms)</span>
-      </div>
-
-      <!-- PAPER / LIVE Toggle -->
-      <div class="mode-toggle-container">
-        <button id="mode-paper-btn" class="mode-btn active paper">PAPER</button>
-        <button id="mode-live-btn" class="mode-btn">LIVE</button>
-      </div>
-
-      <!-- Kill Switch Button -->
-      <button id="kill-switch-btn" class="btn-kill-switch">
-        <span>KILL SWITCH</span>
-      </button>
-
-      <!-- Trade Drawer Button -->
-      <button id="drawer-toggle-btn" class="btn-drawer-toggle">Trades</button>
-    </div>
-  </header>
-
-  <!-- Main View -->
-  <main class="app-main">
-    <!-- Contract Bar -->
-    <div class="contract-bar">
-      <div class="contract-tabs">
-        <button id="btn-tab-ce" class="tab-btn ce active">
+  <!-- Single Unified Top Bar (Borderless, Clean Minimal, Zero Boxes) -->
+  <header class="top-bar">
+    <!-- Left: Contract Switch + Live OHLC -->
+    <div class="bar-section bar-left">
+      <div class="contract-switch">
+        <button id="btn-tab-ce" class="contract-pill active" title="Switch to ATM CE Contract">
+          <span class="pill-dot ce"></span>
           <span id="tab-ce-label">ATM CE</span>
         </button>
-        <button id="btn-tab-pe" class="tab-btn pe">
+        <button id="btn-tab-pe" class="contract-pill" title="Switch to ATM PE Contract">
+          <span class="pill-dot pe"></span>
           <span id="tab-pe-label">ATM PE</span>
         </button>
       </div>
 
-      <div class="contract-meta">
-        <div class="meta-pill">Spot: <strong id="meta-spot-price">--</strong></div>
-        <div class="meta-pill">LTP: <strong id="meta-option-ltp">--</strong></div>
-        <div class="meta-pill">Bid: <strong id="meta-best-bid">--</strong></div>
-        <div class="meta-pill">Ask: <strong id="meta-best-ask">--</strong></div>
-        <div class="meta-pill">Lot: <strong id="meta-lot-size">65</strong></div>
+      <div class="live-ohlc" id="signal-inspector">
+        <span id="inspector-text" class="ohlc-text"></span>
       </div>
     </div>
 
-    <!-- Chart Container -->
-    <div class="chart-wrapper">
-      <div class="chart-legend">
-        <div class="legend-item"><div class="legend-line entry"></div> Entry</div>
-        <div class="legend-item"><div class="legend-line stop"></div> Stop Loss</div>
-        <div class="legend-item"><div class="legend-line target"></div> Target</div>
+    <!-- Center: Spot, Option LTP, Paper Capital (1 Lakh INR), Net P&L (Pure Typography, No Boxes) -->
+    <div class="bar-section bar-center">
+      <div class="metric-card" title="NIFTY 50 Spot Index">
+        <span class="m-lbl">SPOT</span>
+        <span id="meta-spot-price" class="m-val mono">--</span>
       </div>
+
+      <div class="metric-card" title="Option Last Traded Price">
+        <span class="m-lbl">LTP</span>
+        <span id="meta-option-ltp" class="m-val mono">--</span>
+      </div>
+
+      <div class="metric-card capital-card" title="Paper Trading Starting Capital: ₹1,00,000.00">
+        <span class="m-lbl">CAPITAL</span>
+        <span id="meta-capital" class="m-val mono">₹1,00,000.00</span>
+      </div>
+
+      <div class="metric-card pnl-card" id="pnl-card-container" title="Today Net Realised + Unrealised P&amp;L">
+        <span class="m-lbl">NET P&amp;L</span>
+        <span id="total-pnl" class="m-val mono neutral">₹0.00</span>
+      </div>
+    </div>
+
+    <!-- Right: Mode (PAPER/LIVE), Feed Latency, Kill Switch, Monitored Trades Toggle -->
+    <div class="bar-section bar-right">
+      <div class="mode-toggle">
+        <button id="mode-paper-btn" class="mode-pill active paper">PAPER</button>
+        <button id="mode-live-btn" class="mode-pill">LIVE</button>
+      </div>
+
+      <div class="feed-indicator">
+        <span id="feed-status-dot" class="status-dot"></span>
+        <span id="feed-status-text">Connected</span>
+        <span id="latency-display" class="mono text-muted">(0ms)</span>
+      </div>
+
+      <button id="kill-switch-btn" class="kill-btn" title="Emergency Stop">KILL SWITCH</button>
+
+      <button id="sidebar-toggle-btn" class="sidebar-toggle-btn" title="Toggle Monitored Trades Panel">
+        <span class="toggle-icon">☰</span>
+        <span class="toggle-text">Trades</span>
+        <span id="sidebar-toggle-badge" class="badge-count">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Stale Feed Alert -->
+  <div id="stale-feed-banner" class="stale-alert">
+    ⚠️ Real-time feed is STALE. New entries are temporarily paused.
+  </div>
+
+  <!-- Main Dashboard Body: Chart Viewport (Left) + Collapsible Panel (Right) -->
+  <div class="dashboard-body">
+    <!-- Edge-to-Edge Chart Viewport -->
+    <main class="chart-viewport">
       <div id="chart-container"></div>
-    </div>
-  </main>
+      <div id="chart-tooltip" class="chart-floating-tooltip"></div>
+    </main>
 
-  <!-- Trade Log Drawer -->
-  <div id="trade-drawer" class="trade-drawer">
-    <div id="drawer-header" class="drawer-header">
-      <div class="drawer-title">
-        <span>Closed Trades &amp; Order Fills</span>
-        <span id="trade-count-badge" class="strategy-badge">0 Trades</span>
+    <!-- Collapsible Monitored Trades Panel (Right Side, No Boxes, No Borders) -->
+    <aside id="trades-sidebar" class="trades-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title-group">
+          <span class="sidebar-title">MONITORED TRADES</span>
+          <span id="sidebar-count" class="sidebar-count-badge">0</span>
+        </div>
+        <button id="sidebar-close-btn" class="sidebar-collapse-btn" title="Collapse Panel">▶</button>
       </div>
-      <span id="drawer-arrow">&#9650;</span>
-    </div>
-    <div class="drawer-content">
-      <table class="trade-table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Contract</th>
-            <th>Type</th>
-            <th>Qty</th>
-            <th>Entry</th>
-            <th>Exit</th>
-            <th>Gross P&amp;L</th>
-            <th>Charges</th>
-            <th>Net P&amp;L</th>
-            <th>Reason</th>
-          </tr>
-        </thead>
-        <tbody id="trade-table-body">
-          <tr>
-            <td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">No closed trades yet today.</td>
-          </tr>
-        </tbody>
-      </table>
+
+      <!-- Monitored Trades List (Showing Side, Time, and Net P&L only - No Boxes) -->
+      <div id="sidebar-trades-list" class="sidebar-trades-list">
+        <div class="no-trades-msg">No trades monitored today yet.</div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Bottom Trades Tray / Modal (Clean Minimal) -->
+  <div id="trade-drawer" class="trade-modal-backdrop">
+    <div class="trade-modal-container">
+      <div class="modal-header">
+        <h3>Closed Trades &amp; Execution Fills</h3>
+        <button id="drawer-close-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <table class="trade-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Contract</th>
+              <th>Type</th>
+              <th>Qty</th>
+              <th>Entry Price</th>
+              <th>Exit Price</th>
+              <th>Gross P&amp;L</th>
+              <th>Statutory Charges</th>
+              <th>Net P&amp;L</th>
+              <th>Exit Reason</th>
+            </tr>
+          </thead>
+          <tbody id="trade-table-body">
+            <tr>
+              <td colspan="10" style="text-align: center; color: #71717a; padding: 24px;">No closed trades yet today.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
   <!-- Live Mode Confirmation Modal -->
   <div id="live-confirm-modal" class="modal-backdrop">
-    <div class="modal-box">
-      <h3 class="modal-title">Confirm Switch to LIVE Trading</h3>
+    <div class="modal-container">
+      <h3 class="modal-title">Switch to LIVE Trading</h3>
       <p class="modal-desc">
-        You are about to switch to <strong>LIVE execution</strong>. Real marketable limit orders will be sent to your Angel One account using real capital.
+        Real marketable limit orders will be sent to Angel One SmartAPI using real account funds.
         <br><br>
         To confirm, type <strong>LIVE</strong> below:
       </p>
-      <input type="text" id="live-confirm-input" class="modal-input" placeholder="Type LIVE to confirm" autocomplete="off">
+      <input type="text" id="live-confirm-input" class="modal-input" placeholder="Type LIVE" autocomplete="off">
       <div class="modal-actions">
-        <button id="live-confirm-cancel" class="btn-secondary">Cancel</button>
-        <button id="live-confirm-submit" class="btn-danger">Switch to LIVE</button>
+        <button id="live-confirm-cancel" class="btn-cancel">Cancel</button>
+        <button id="live-confirm-submit" class="btn-live">Confirm LIVE</button>
       </div>
     </div>
+  </div>
+
+  <!-- Hidden elements for backward-compat JS bindings -->
+  <div style="display:none;">
+    <span id="realised-pnl">₹0.00</span>
+    <span id="unrealised-pnl">₹0.00</span>
+    <span id="meta-best-bid">--</span>
+    <span id="meta-best-ask">--</span>
+    <button id="drawer-toggle-btn"></button>
+    <strong id="meta-lot-size">65</strong>
+    <div id="drawer-header"></div>
   </div>
 
   <!-- Scripts -->

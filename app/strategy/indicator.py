@@ -9,7 +9,7 @@ Follows TradingView documented definitions:
 - Confirmed trend break counter
 """
 import math
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 from app.config import settings
@@ -236,13 +236,18 @@ class PineIndicatorState:
 
         # Contract side: 1 for CE, -1 for PE
         if contract_side is None:
-            sym_upper = symbol.upper()
-            if "CALL" in sym_upper or sym_upper.endswith("CE"):
+            if settings.pine_contract == "CE (CALL)":
                 contract_side = 1
-            elif "PUT" in sym_upper or sym_upper.endswith("PE"):
+            elif settings.pine_contract == "PE (PUT)":
                 contract_side = -1
             else:
-                contract_side = 0
+                sym_upper = symbol.upper()
+                if "CALL" in sym_upper or sym_upper.endswith("CE"):
+                    contract_side = 1
+                elif "PUT" in sym_upper or sym_upper.endswith("PE"):
+                    contract_side = -1
+                else:
+                    contract_side = 0
 
         # Indicator series
         ema9 = calculate_ema(closes, 9)
@@ -314,12 +319,13 @@ class PineIndicatorState:
         # 2. Entry Triggers
         # priorHigh = ta.highest(high, 3)[1] (i.e. highest of highs[i-3], highs[i-2], highs[i-1])
         priorHigh = max(highs[i - 3 : i]) if i >= 3 else highs[i - 1]
+        priorHighPrev = max(highs[i - 4 : i - 1]) if i >= 4 else (highs[i - 2] if i >= 2 else priorHigh)
 
         # ta.crossover(close, ema21)
         reclaim = (closes[i] > ema21[i]) and (closes[i - 1] <= ema21[i - 1])
 
         # ta.crossover(close, priorHigh)
-        breakRecentHigh = (closes[i] > priorHigh) and (closes[i - 1] <= priorHigh)
+        breakRecentHigh = (closes[i] > priorHigh) and (closes[i - 1] <= priorHighPrev)
 
         # pullbackResume: low[1] <= ema9[1] and close > high[1] and close > ema9
         pullbackResume = (lows[i - 1] <= ema9[i - 1]) and (closes[i] > highs[i - 1]) and (closes[i] > ema9[i])
@@ -369,8 +375,11 @@ class PineIndicatorState:
         )
 
         # 5. Session Entry Window: 09:30 - 14:45 IST
-        # clock = hour(time_close, tz) * 60 + minute(time_close, tz)
-        close_dt = timestamps[i]
+        # In Pine Script: clock = hour(time_close, tz) * 60 + minute(time_close, tz)
+        close_dt = getattr(candles[i], "close_time", None)
+        if not close_dt:
+            tf_mins = getattr(candles[i], "timeframe_minutes", settings.TIMEFRAME_MINUTES)
+            close_dt = timestamps[i] + timedelta(minutes=tf_mins)
         clock = close_dt.hour * 60 + close_dt.minute
         sessionOpen = (close_dt.weekday() < 5) and (dtime(9, 15) <= close_dt.time() <= dtime(15, 30))
         entryHours = sessionOpen and (570 <= clock < 885)

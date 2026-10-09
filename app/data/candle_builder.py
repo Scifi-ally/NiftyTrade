@@ -16,7 +16,8 @@ class Candle:
         low_price: float,
         close_price: float,
         volume: float = 0.0,
-        is_closed: bool = False
+        is_closed: bool = False,
+        timeframe_minutes: int = 1
     ):
         self.timestamp = timestamp
         self.open = open_price
@@ -25,6 +26,11 @@ class Candle:
         self.close = close_price
         self.volume = volume
         self.is_closed = is_closed
+        self.timeframe_minutes = timeframe_minutes
+
+    @property
+    def close_time(self) -> datetime:
+        return self.timestamp + timedelta(minutes=self.timeframe_minutes)
 
     def update(self, ltp: float, vol_delta: float):
         if ltp > self.high:
@@ -36,9 +42,15 @@ class Candle:
             self.volume += vol_delta
 
     def to_dict(self) -> Dict[str, Any]:
+        # TradingView Lightweight Charts operates internally in UTC.
+        # Adding 19800 seconds (5h 30m IST offset) aligns candle timestamps
+        # so that the time axis and crosshair tooltips display accurate Indian Standard Time (IST).
+        chart_time = int(self.timestamp.timestamp()) + 19800
         return {
             "timestamp": self.timestamp.isoformat(),
-            "time": int(self.timestamp.timestamp()),
+            "close_time": self.close_time.isoformat(),
+            "time": chart_time,
+            "raw_time": int(self.timestamp.timestamp()),
             "open": round(self.open, 2),
             "high": round(self.high, 2),
             "low": round(self.low, 2),
@@ -59,7 +71,7 @@ class CandleBuilder:
 
     def __init__(
         self,
-        timeframe_minutes: int = 5,
+        timeframe_minutes: int = 1,
         on_candle_close: Optional[Callable[[str, Candle], None]] = None,
         on_candle_update: Optional[Callable[[str, Candle], None]] = None
     ):
@@ -79,6 +91,10 @@ class CandleBuilder:
     def get_history(self, token: str) -> List[Candle]:
         """Return closed candle history for a token."""
         return list(self._history.get(str(token), []))
+
+    def get_completed_candles(self, token: str) -> List[Candle]:
+        """Alias for get_history returning completed closed candles."""
+        return self.get_history(token)
 
     def get_current_candle(self, token: str) -> Optional[Candle]:
         """Return currently forming candle for a token."""
@@ -120,7 +136,18 @@ class CandleBuilder:
         candle_list: List[Candle] = []
 
         for item in raw_candles:
-            ts_str = item["timestamp"]
+            if isinstance(item, (list, tuple)):
+                ts_str = str(item[0])
+                o_val, h_val, l_val, c_val = float(item[1]), float(item[2]), float(item[3]), float(item[4])
+                v_val = float(item[5]) if len(item) > 5 else 0.0
+            else:
+                ts_str = str(item["timestamp"])
+                o_val = float(item["open"])
+                h_val = float(item["high"])
+                l_val = float(item["low"])
+                c_val = float(item["close"])
+                v_val = float(item.get("volume", 0.0))
+
             # Parse ISO or standard format
             try:
                 if "T" in ts_str:
@@ -137,14 +164,20 @@ class CandleBuilder:
                 except Exception:
                     continue
 
+            # Strict filter: Regular NSE trading session is 09:15 to 15:30 IST.
+            # Discard post-market settlement bars (15:30 - 15:40) and pre-market bars.
+            if dt.time() < dtime(9, 15) or dt.time() >= dtime(15, 30):
+                continue
+
             c = Candle(
                 timestamp=dt,
-                open_price=float(item["open"]),
-                high_price=float(item["high"]),
-                low_price=float(item["low"]),
-                close_price=float(item["close"]),
-                volume=float(item.get("volume", 0.0)),
-                is_closed=True
+                open_price=o_val,
+                high_price=h_val,
+                low_price=l_val,
+                close_price=c_val,
+                volume=v_val,
+                is_closed=True,
+                timeframe_minutes=self.timeframe_minutes
             )
             candle_list.append(c)
 
@@ -161,6 +194,21 @@ class CandleBuilder:
             return
 
         tick_dt: datetime = tick.get("datetime_ist") or datetime.now(tz=IST)
+
+        # Enforce market hours (09:15 to 15:30 IST): ignore post-market settlement ticks
+        if tick_dt.time() >= dtime(15, 30) or tick_dt.time() < dtime(9, 15):
+            current = self._current_candle.get(token)
+            if current is not None:
+                current.is_closed = True
+                self._history[token].append(current)
+                self._current_candle.pop(token, None)
+                if self.on_candle_close:
+                    try:
+                        self.on_candle_close(token, current)
+                    except Exception as e:
+                        logger.error(f"Error in on_candle_close callback at market close: {e}")
+            return
+
         cum_volume = int(tick.get("volume", 0))
 
         bucket_start = self.calculate_bucket_start(tick_dt)
@@ -197,7 +245,8 @@ class CandleBuilder:
                 low_price=ltp,
                 close_price=ltp,
                 volume=vol_delta,
-                is_closed=False
+                is_closed=False,
+                timeframe_minutes=self.timeframe_minutes
             )
             self._current_candle[token] = new_candle
             self._bar_start_cum_vol[token] = cum_volume

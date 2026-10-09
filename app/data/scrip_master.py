@@ -26,6 +26,11 @@ class ScripMaster:
         self._nifty_options: List[Dict[str, Any]] = []
         self._is_loaded = False
 
+    def validate_nifty_symbol(self, symbol: str) -> bool:
+        """Validate that symbol strictly belongs to NIFTY index or NIFTY options."""
+        settings.validate_symbol_strictly(symbol)
+        return True
+
     def is_cache_valid(self) -> bool:
         """Check if local cache exists and was downloaded today after 08:00 IST."""
         if not self.cache_path.exists() or self.cache_path.stat().st_size < 1000000:
@@ -289,6 +294,51 @@ class ScripMaster:
             if str(opt["token"]) == str(token):
                 return opt
         return None
+
+    def get_fixed_option(
+        self,
+        strike: float,
+        option_type: str,
+        expiry: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Find a specific NIFTY option by strike, option_type ('CE'/'PE'), and optional expiry.
+        If expiry is omitted or not found, uses the nearest weekly expiry.
+        """
+        self.load()
+        opt_type = option_type.upper().strip()
+        if opt_type not in ("CE", "PE"):
+            raise ScripMasterError(f"Invalid option type '{option_type}'. Must be CE or PE.")
+
+        target_date = None
+        if expiry:
+            exp_clean = expiry.strip().upper()
+            for fmt in ("%d%b%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y"):
+                try:
+                    target_date = datetime.strptime(exp_clean, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if not target_date:
+                for opt in self._nifty_options:
+                    if opt["expiry_str"] == exp_clean:
+                        target_date = opt["expiry_date"]
+                        break
+
+        if not target_date:
+            target_date = self.get_nearest_expiry()
+
+        for opt in self._nifty_options:
+            if (
+                opt["expiry_date"] == target_date
+                and opt["option_type"] == opt_type
+                and abs(opt["strike"] - strike) < 0.01
+            ):
+                return opt
+
+        raise ScripMasterError(
+            f"Fixed NIFTY option not found for Strike: {strike}, Type: {opt_type}, Expiry: {target_date}"
+        )
 
     def validate_option_symbol(self, symbol: str) -> None:
         """Strictly validate that symbol is a NIFTY option."""

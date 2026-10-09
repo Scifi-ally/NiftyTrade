@@ -130,7 +130,7 @@ class AngelOneAdapter(BrokerAdapter):
                 # 'net' represents net available cash/margin
                 net_val = data.get("net", data.get("availablecash", "0.0"))
                 funds = float(net_val)
-                logger.info(f"Fetched real Angel One available margin: ₹{funds:,.2f}")
+                logger.info(f"Fetched real Angel One available margin: Rs. {funds:,.2f}")
                 return funds
             logger.error(f"Failed to fetch RMS limits: {resp}")
             raise AuthenticationError(f"Could not retrieve account funds: {resp.get('message', 'Unknown error')}")

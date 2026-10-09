@@ -44,9 +44,35 @@ class LiveTradingEngine:
                 net_qty = int(pos.get("netqty", 0))
                 if net_qty != 0:
                     sym = pos.get("tradingsymbol", "")
-                    logger.warning(f"Existing open broker position detected: {sym} (Net Qty: {net_qty})")
+                    token = pos.get("symboltoken", "")
+                    logger.warning(f"Existing open broker position detected: {sym} (Token {token}, Net Qty: {net_qty})")
         except Exception as e:
             logger.error(f"Position reconciliation error: {e}")
+
+    def _verify_order_fill(self, order_id: str, timeout_sec: float = 3.0) -> Dict[str, Any]:
+        """
+        Poll broker order book to verify actual execution status, price, and catch rejections.
+        """
+        end_time = time.time() + timeout_sec
+        while time.time() < end_time:
+            try:
+                orders = self.adapter.get_orders()
+                for o in orders:
+                    if str(o.get("orderid", "")) == str(order_id):
+                        raw_status = str(o.get("status", o.get("orderstatus", ""))).lower().strip()
+                        avg_price = float(o.get("averageprice", o.get("price", 0.0)) or 0.0)
+                        filled_shares = int(o.get("filledshares", o.get("quantity", 0)) or 0)
+                        text = str(o.get("text", o.get("rejectionreason", "")))
+
+                        if raw_status in ("complete", "completed", "filled", "traded"):
+                            return {"status": "FILLED", "fill_price": avg_price if avg_price > 0 else 0.0, "filled_qty": filled_shares, "text": text}
+                        elif raw_status in ("rejected", "cancelled", "cancled"):
+                            return {"status": "REJECTED", "fill_price": 0.0, "filled_qty": 0, "text": text or "Order rejected by broker"}
+            except Exception as e:
+                logger.warning(f"Error checking order status: {e}")
+            time.sleep(0.5)
+
+        return {"status": "PENDING", "fill_price": 0.0, "filled_qty": 0, "text": "Fill verification timed out"}
 
     def execute_entry(
         self,
@@ -101,13 +127,36 @@ class LiveTradingEngine:
                     raise OrderExecutionError("Broker returned empty order ID.")
             except Exception as e:
                 logger.error(f"Live order chunk placement failed: {e}")
-                # Cancel any placed chunks if partial failure
                 for oid in placed_order_ids:
                     try:
                         self.adapter.cancel_order(oid)
                     except Exception:
                         pass
                 raise OrderExecutionError(f"Live entry failed: {e}")
+
+        # Verify fill status on primary chunk
+        fill_info = self._verify_order_fill(placed_order_ids[0])
+        if fill_info["status"] == "REJECTED":
+            logger.error(f"Broker rejected live order {placed_order_ids[0]}: {fill_info['text']}")
+            db.save_order({
+                "order_id": placed_order_ids[0],
+                "mode": "LIVE",
+                "token": token,
+                "symbol": symbol,
+                "transaction_type": "BUY",
+                "order_type": "LIMIT",
+                "quantity": quantity,
+                "price": limit_price,
+                "status": "REJECTED",
+                "created_at": datetime.now(tz=IST).isoformat(),
+                "filled_at": None,
+                "fill_price": 0.0,
+                "latency_ms": round((time.time() - start_time) * 1000, 1)
+            })
+            raise OrderExecutionError(f"Live order rejected by broker: {fill_info['text']}")
+
+        if fill_info["fill_price"] > 0:
+            fill_price = fill_info["fill_price"]
 
         latency_ms = round((time.time() - start_time) * 1000, 1)
         now_dt = datetime.now(tz=IST)

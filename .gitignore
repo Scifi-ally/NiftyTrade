@@ -4,9 +4,12 @@ __pycache__/
 *$py.class
 *.so
 .pytest_cache/
+venv/
+.venv/
 
-# Environment and Secrets
-.env
+# Environment backups (keep private credentials safe)
+.env.backup
+.env.local
 
 # Data & Database
 data/OpenAPIScripMaster.json
@@ -17,3 +20,7 @@ data/*.tmp
 # Logs
 logs/
 *.log
+
+# Cloudflare binary
+cloudflared.exe
+cloudflared

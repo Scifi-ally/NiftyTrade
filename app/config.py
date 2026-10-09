@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BASE_DIR / ".env"),
+        env_file=[str(BASE_DIR / ".env"), str(BASE_DIR / ".env.local")],
         env_file_encoding="utf-8",
         extra="ignore"
     )
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     FIXED_STRIKE: float = Field(default=0.0, description="Strike price if fixed")
     FIXED_OPT_TYPE: Literal["CE", "PE"] = Field(default="CE", description="CE or PE if fixed")
 
-    TIMEFRAME_MINUTES: int = Field(default=5, ge=1, le=15, description="Candle timeframe in minutes (1 to 15)")
+    TIMEFRAME_MINUTES: int = Field(default=1, ge=1, le=15, description="Candle timeframe in minutes (1 to 15)")
 
     # -------------------------------------------------------------------------
     # STRATEGY INPUTS (EXACT PINE SCRIPT DEFAULTS)

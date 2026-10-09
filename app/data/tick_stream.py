@@ -18,14 +18,17 @@ class TickStream:
     def __init__(
         self,
         adapter: AngelOneAdapter,
-        on_tick: Optional[Callable[[Dict[str, Any]], None]] = None
+        on_tick: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_reconnect: Optional[Callable[[List[Dict[str, Any]]], None]] = None
     ):
         self.adapter = adapter
         self.on_tick_callback = on_tick
+        self.on_reconnect_callback = on_reconnect
         self._ws: Optional[SmartWebSocketV2] = None
         self._thread: Optional[threading.Thread] = None
         self._is_running = False
         self._is_connected = False
+        self._reconnect_count = 0
         self._subscribed_tokens: List[Dict[str, Any]] = []
 
         # Real-time state
@@ -87,6 +90,16 @@ class TickStream:
                 )
             except Exception as e:
                 logger.error(f"Failed to subscribe on open: {e}")
+
+        # If reconnecting after a drop, trigger historical backfill
+        if self._reconnect_count > 0 and self.on_reconnect_callback:
+            logger.info("WebSocket reconnected. Triggering backfill for missed candles...")
+            try:
+                self.on_reconnect_callback(self._subscribed_tokens)
+            except Exception as e:
+                logger.error(f"Error during backfill on reconnect: {e}")
+
+        self._reconnect_count += 1
 
     def _on_close(self, wsapp):
         logger.warning("SmartWebSocketV2 connection closed.")
@@ -209,6 +222,24 @@ class TickStream:
         def _run():
             while self._is_running:
                 try:
+                    # Auto-refresh session and tokens before (re)connecting
+                    self.adapter.ensure_valid_session()
+                    jwt_token = self.adapter.get_jwt_token()
+                    feed_token = self.adapter.get_feed_token()
+                    if self._ws is None or getattr(self._ws, "auth_token", None) != jwt_token:
+                        self._ws = SmartWebSocketV2(
+                            auth_token=jwt_token,
+                            api_key=self.adapter.api_key,
+                            client_code=self.adapter.client_code,
+                            feed_token=feed_token,
+                            max_retry_attempt=5,
+                            retry_strategy=1,
+                            retry_delay=5
+                        )
+                        self._ws.on_open = self._on_open
+                        self._ws.on_close = self._on_close
+                        self._ws.on_error = self._on_error
+                        self._ws.on_data = self._on_data
                     self._ws.connect()
                 except Exception as e:
                     logger.warning(f"WebSocket connect error: {e}. Reconnecting in 5s...")

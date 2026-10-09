@@ -14,19 +14,20 @@ A complete, free, local automated trading system that runs **ONE** strategy—an
 
 ---
 
-## Quick Start & One-Command Run
+---
 
-### 1. Install Dependencies
+## 🚀 One-Click Setup & Running on Any Laptop / Machine
+
+You can run this on any old laptop or desktop without manual complex setup.
+
+### Step 1: Clone or Download
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/Scifi-ally/NiftyTrade.git
+cd NiftyTrade
 ```
 
-### 2. Configure Credentials
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
-Fill in your Angel One credentials:
+### Step 2: Add Your Credentials in `.env`
+Open the `.env` file that is already included in the folder and paste your 4 Angel One values:
 ```env
 ANGEL_API_KEY=your_smartapi_api_key_here
 ANGEL_CLIENT_CODE=your_client_code_here
@@ -34,23 +35,39 @@ ANGEL_PIN=your_mpin_here
 ANGEL_TOTP_SECRET=your_32_char_base32_totp_secret_here
 ```
 
-### 3. Run Phase 1 Diagnostic Test
-```bash
-python check_angel.py
-```
-Validates credentials, session creation, scrip master download (147k+ instruments), ATM option resolution, historical 50 candles, and WebSocket tick stream with latency stats.
+### Step 3: Launch
 
-### 4. Run Test Suite
-```bash
-pytest
-```
-Runs 18 unit and integration tests covering indicator math, position sizing, risk caps, trailing stop, and API endpoints.
+#### 🟢 Option A: Local / Wi-Fi Access Only
+* **Windows**: Double-click `run.bat`
+* **Linux / Mac**: Run `./run.sh`
 
-### 5. Launch Trading System & Web UI
+This automatically sets up Python virtual environment (`venv`), installs dependencies, and runs the server on `0.0.0.0:8000`.
+* Local: **`http://localhost:8000`**
+* Same Wi-Fi Network: **`http://<laptop-ip>:8000`**
+
+#### 🌐 Option B: Public Internet Access (Accessible from Anywhere on Any Device)
+To access the live trading dashboard from your phone, office, or anywhere on the internet without router port forwarding or static IP:
+* **Windows**: Double-click `run_with_internet.bat`
+* **Linux / Mac**: Run `./run_with_internet.sh`
+
+This launches the server and automatically starts a secure Cloudflare Tunnel. It will print a live public HTTPS link in your console:
+```
+======================================================================
+  >>> LIVE INTERNET URL (ACCESSIBLE FROM ANYWHERE ON ANY DEVICE) <<<
+  URL: https://random-word-abc.trycloudflare.com
+======================================================================
+```
+You can open this URL on your phone or any computer in the world to view the live dashboard and trades with full WebSocket streaming!
+
+---
+
+### Manual Python Run (Alternative)
 ```bash
+python -m venv venv
+# Windows: venv\Scripts\activate | Linux/Mac: source venv/bin/activate
+pip install -r requirements.txt
 python main.py
 ```
-Open **[http://127.0.0.1:8000](http://127.0.0.1:8000)** in your browser.
 
 ---
 

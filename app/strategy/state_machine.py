@@ -24,11 +24,15 @@ class StrategyStateMachine:
         self,
         candle_builder: CandleBuilder,
         live_engine: Optional[LiveTradingEngine] = None,
+        tick_stream: Optional[Any] = None,
+        adapter: Optional[Any] = None,
         on_signal_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_trade_event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
     ):
         self.candle_builder = candle_builder
         self.live_engine = live_engine
+        self.tick_stream = tick_stream
+        self.adapter = adapter
         self.on_signal_callback = on_signal_callback
         self.on_trade_event_callback = on_trade_event_callback
 
@@ -145,6 +149,19 @@ class StrategyStateMachine:
         if hit_stop or hit_target:
             reason = "SL / BOTH TOUCHED" if (hit_stop and hit_target) else ("SL TOUCHED" if hit_stop else "TARGET TOUCHED")
             logger.info(f"Tick exit condition met on {active_trade['symbol']}: {reason} (LTP: ₹{ltp:.2f})")
+
+            # Emit Pine indicator SELL marker signal
+            if self.on_signal_callback:
+                self.on_signal_callback({
+                    "timestamp": datetime.now(tz=IST).isoformat(),
+                    "action": "SELL",
+                    "token": token,
+                    "symbol": active_trade["symbol"],
+                    "contract_side": active_trade["option_type"],
+                    "exit_price": ltp,
+                    "reason": reason
+                })
+
             closed = self.current_engine.execute_exit(tick=tick, reason=reason)
             self._highest_price_since_entry = 0.0
             self._bought_bar_index = None
@@ -170,6 +187,13 @@ class StrategyStateMachine:
         bar_index = len(candles) - 1
         indicator = self.get_indicator_state(token_str)
 
+        # Resolve contract metadata for symbol and side
+        from app.data.scrip_master import scrip_master
+        opt_info = scrip_master.get_option_by_token(token_str)
+        opt_symbol = opt_info["symbol"] if opt_info else f"NIFTY_{token_str}"
+        opt_type = opt_info["option_type"] if opt_info else ("CE" if "CE" in opt_symbol else "PE")
+        contract_side = 1 if opt_type == "CE" else -1
+
         # Fetch index candles if confirmation is needed
         index_candles = self.candle_builder.get_history(self.index_token) if (settings.useIndex and self.index_token) else None
 
@@ -177,6 +201,8 @@ class StrategyStateMachine:
         res = indicator.evaluate(
             candles=candles,
             index_candles=index_candles,
+            symbol=opt_symbol,
+            contract_side=contract_side,
             strict=settings.strict,
             useIndex=settings.useIndex,
             useVWAP=settings.useVWAP,
@@ -210,23 +236,71 @@ class StrategyStateMachine:
                     if res.get("index_direction", 0) == -side:
                         index_reversed = True
 
-                should_exit = new_day or session_exit or index_reversed or confirmed_trend_break or time_limit
+                hit_stop = candle.low <= active_trade["current_stop"]
+                hit_target = candle.high >= active_trade["target"]
+
+                should_exit = (
+                    new_day
+                    or session_exit
+                    or hit_stop
+                    or hit_target
+                    or index_reversed
+                    or confirmed_trend_break
+                    or time_limit
+                )
 
                 if should_exit:
-                    reason = (
-                        "SESSION GAP" if new_day
-                        else "TIME EXIT" if session_exit
-                        else "NIFTY REVERSED" if index_reversed
-                        else "CONFIRMED TREND EXIT" if confirmed_trend_break
-                        else "HOLD LIMIT"
-                    )
+                    if new_day:
+                        reason = "SESSION GAP"
+                    elif hit_stop:
+                        reason = "SL / BOTH TOUCHED" if hit_target else "SL TOUCHED"
+                    elif hit_target:
+                        reason = "TARGET TOUCHED"
+                    elif session_exit:
+                        reason = "TIME EXIT"
+                    elif index_reversed:
+                        reason = "NIFTY REVERSED"
+                    elif confirmed_trend_break:
+                        reason = "CONFIRMED TREND EXIT"
+                    else:
+                        reason = "HOLD LIMIT"
                     logger.info(f"Candle close exit triggered for {active_trade['symbol']}: {reason}")
-                    exit_tick = {
-                        "token": token_str,
-                        "ltp": candle.close,
-                        "best_bid": candle.close,
-                        "latency_ms": 0.0
-                    }
+
+                    # Determine realistic exit reference price
+                    if hit_stop:
+                        sl_level = active_trade["current_stop"]
+                        exit_price = min(sl_level, candle.open)
+                    elif hit_target:
+                        target_level = active_trade["target"]
+                        exit_price = target_level
+                    else:
+                        exit_price = candle.close
+
+                    # Emit Pine indicator SELL marker signal
+                    if self.on_signal_callback:
+                        self.on_signal_callback({
+                            "timestamp": candle.timestamp.isoformat(),
+                            "chart_time": int(candle.timestamp.timestamp()) + 19800,
+                            "action": "SELL",
+                            "token": token_str,
+                            "symbol": active_trade["symbol"],
+                            "contract_side": active_trade["option_type"],
+                            "exit_price": exit_price,
+                            "reason": reason,
+                            "bar_index": bar_index
+                        })
+
+                    # Realistic exit tick fill
+                    live_tick = self.tick_stream.get_latest_tick(token_str) if self.tick_stream else None
+                    if live_tick and live_tick.get("best_bid", 0) > 0 and not (hit_stop or hit_target):
+                        exit_tick = live_tick
+                    else:
+                        exit_tick = {
+                            "token": token_str,
+                            "ltp": exit_price,
+                            "best_bid": 0.0,
+                            "latency_ms": 0.0
+                        }
                     closed = self.current_engine.execute_exit(tick=exit_tick, reason=reason)
                     self._last_exit_bar[token_str] = bar_index
                     self._highest_price_since_entry = 0.0
@@ -254,19 +328,21 @@ class StrategyStateMachine:
                 entry_price = res["close"]
                 candidate_stop = res["candidateStop"]
                 target = res["target"]
-                opt_type = "CE" if "CE" in token_str or "CALL" in token_str else "PE"
-
                 # Contract metadata for symbol & lot size
                 from app.data.scrip_master import scrip_master
                 opt_info = scrip_master.get_option_by_token(token_str) or {
                     "symbol": f"NIFTY_{token_str}",
-                    "lot_size": 65
+                    "lot_size": 65,
+                    "option_type": "CE" if contract_side == 1 else "PE"
                 }
-                symbol = opt_info["symbol"]
+                symbol = opt_info.get("symbol", f"NIFTY_{token_str}")
+                opt_type = opt_info.get("option_type", "CE" if (contract_side == 1 or "CE" in symbol) else "PE")
                 lot_size = opt_info.get("lot_size", 65)
 
                 signal_record = {
                     "timestamp": candle.timestamp.isoformat(),
+                    "chart_time": int(candle.timestamp.timestamp()) + 19800,
+                    "action": "BUY",
                     "token": token_str,
                     "symbol": symbol,
                     "contract_side": opt_type,
@@ -283,9 +359,28 @@ class StrategyStateMachine:
 
                 # Consult Sizing & Risk Management (Never alters or creates entry decision)
                 capital = settings.PAPER_CAPITAL
+                if capital <= 0 and self.adapter and self.adapter.is_logged_in():
+                    try:
+                        capital = self.adapter.get_funds()
+                    except Exception:
+                        capital = 100000.0
+                if capital <= 0:
+                    capital = 100000.0
+
                 closed_trades = db.get_closed_trades(50)
                 today_pnl_data = db.get_today_pnl()
                 today_trade_count = db.get_today_trade_count()
+
+                # Feed freshness and spread checks
+                is_feed_stale = self.tick_stream.is_stale if self.tick_stream else False
+                latest_tick = self.tick_stream.get_latest_tick(token_str) if self.tick_stream else None
+                bid_ask_spread_pct = 0.0
+                if latest_tick:
+                    ltp_val = float(latest_tick.get("ltp", 0.0))
+                    b_bid = float(latest_tick.get("best_bid", 0.0))
+                    b_ask = float(latest_tick.get("best_ask", 0.0))
+                    if ltp_val > 0 and b_ask > b_bid > 0:
+                        bid_ask_spread_pct = ((b_ask - b_bid) / ltp_val) * 100.0
 
                 sizing = position_sizer.evaluate_entry(
                     available_capital=capital,
@@ -295,6 +390,8 @@ class StrategyStateMachine:
                     closed_trades=closed_trades,
                     today_pnl=today_pnl_data["net_pnl"],
                     today_trade_count=today_trade_count,
+                    bid_ask_spread_pct=bid_ask_spread_pct,
+                    is_feed_stale=is_feed_stale,
                     is_kill_switch_active=self.is_kill_switch_active
                 )
 
@@ -314,13 +411,17 @@ class StrategyStateMachine:
                     logger.warning(f"Trade sizing blocked entry: {sizing['reason']}")
                     return
 
-                # Execute Entry
-                entry_tick = {
-                    "token": token_str,
-                    "ltp": entry_price,
-                    "best_ask": entry_price,
-                    "latency_ms": 0.0
-                }
+                # Execute Entry: Use real best_ask if live depth available, otherwise enforce slippage
+                live_tick = self.tick_stream.get_latest_tick(token_str) if self.tick_stream else None
+                if live_tick and live_tick.get("best_ask", 0) > live_tick.get("ltp", 0):
+                    entry_tick = live_tick
+                else:
+                    entry_tick = {
+                        "token": token_str,
+                        "ltp": entry_price,
+                        "best_ask": 0.0,
+                        "latency_ms": 0.0
+                    }
                 trade = self.current_engine.execute_entry(
                     token=token_str,
                     symbol=symbol,
@@ -337,3 +438,213 @@ class StrategyStateMachine:
 
                 if self.on_trade_event_callback and trade:
                     self.on_trade_event_callback("ENTRY", trade)
+
+    def calculate_historical_markers(self, token: str, candles: List[Candle]) -> List[Dict[str, Any]]:
+        """
+        Replays the Pine Script state machine over historical candles to compute
+        historical indicator BUY/SELL markers and real bot fills.
+        """
+        token_str = str(token)
+        if len(candles) < 26:
+            return []
+
+        from app.data.scrip_master import scrip_master
+        opt_info = scrip_master.get_option_by_token(token_str)
+        opt_symbol = opt_info["symbol"] if opt_info else f"NIFTY_{token_str}"
+        opt_type = opt_info["option_type"] if opt_info else ("CE" if "CE" in opt_symbol else "PE")
+        contract_side = 1 if opt_type == "CE" else -1
+
+        index_candles = self.candle_builder.get_history(self.index_token) if (settings.useIndex and self.index_token) else None
+
+        hist_state = PineIndicatorState(mintick=0.05)
+        markers: List[Dict[str, Any]] = []
+
+        is_active = False
+        bought_bar = -1
+        last_exit_bar = -999
+        entry = 0.0
+        stop = 0.0
+        target = 0.0
+
+        n = len(candles)
+        for i in range(25, n):
+            sub_candles = candles[: i + 1]
+            sub_index = index_candles[: i + 1] if index_candles else None
+
+            res = hist_state.evaluate(
+                candles=sub_candles,
+                index_candles=sub_index,
+                symbol=opt_symbol,
+                contract_side=contract_side,
+                strict=settings.strict,
+                useIndex=settings.useIndex,
+                useVWAP=settings.useVWAP,
+                useVolume=settings.useVolume,
+                minRVOL=settings.minRVOL,
+                rewardR=settings.rewardR,
+                maxRiskPct=settings.maxRiskPct,
+                trendExitBars=settings.trendExitBars
+            )
+
+            bar = candles[i]
+            time_val = bar.to_dict()["time"]
+            bar_index = i
+            exited_this_bar = False
+
+            if is_active and bar_index > bought_bar:
+                prev_bar = candles[i - 1]
+                new_day = bar.timestamp.date() != prev_bar.timestamp.date()
+                session_exit = res.get("sessionExit", False)
+                hit_stop = bar.low <= stop
+                hit_target = bar.high >= target
+
+                index_reversed = False
+                if settings.useIndex and res.get("index_direction") != 0:
+                    index_reversed = res["index_direction"] == -contract_side
+
+                time_limit = (bar_index - bought_bar) >= settings.maxHold
+                confirmed_trend_break = res.get("confirmedTrendBreak", False)
+
+                should_exit = (
+                    new_day
+                    or session_exit
+                    or hit_stop
+                    or hit_target
+                    or index_reversed
+                    or confirmed_trend_break
+                    or time_limit
+                )
+
+                if should_exit:
+                    if new_day:
+                        reason = "SESSION GAP"
+                    elif hit_stop:
+                        reason = "SL / BOTH TOUCHED" if hit_target else "SL TOUCHED"
+                    elif hit_target:
+                        reason = "TARGET TOUCHED"
+                    elif session_exit:
+                        reason = "TIME EXIT"
+                    elif index_reversed:
+                        reason = "NIFTY REVERSED"
+                    elif confirmed_trend_break:
+                        reason = "CONFIRMED TREND EXIT"
+                    else:
+                        reason = "HOLD LIMIT"
+
+                    color = "#ef4444" if hit_stop else ("#0891b2" if hit_target else "#64748b")
+                    if hit_stop:
+                        short_text = "SL EXIT"
+                    elif hit_target:
+                        short_text = "TARGET"
+                    elif session_exit:
+                        short_text = "TIME EXIT"
+                    elif confirmed_trend_break:
+                        short_text = "TREND EXIT"
+                    elif time_limit:
+                        short_text = "HOLD EXIT"
+                    else:
+                        short_text = "SELL EXIT"
+
+                    markers.append({
+                        "time": time_val,
+                        "position": "aboveBar",
+                        "shape": "arrowDown",
+                        "color": color,
+                        "text": short_text,
+                        "details": f"SELL {opt_type} ({reason}) @ ₹{bar.close:.2f}"
+                    })
+
+                    is_active = False
+                    exited_this_bar = True
+                    last_exit_bar = bar_index
+                    entry = 0.0
+                    stop = 0.0
+                    target = 0.0
+
+            cooldown_ok = (last_exit_bar < 0) or ((bar_index - last_exit_bar) >= settings.cooldown)
+            can_enter = (
+                not is_active
+                and not exited_this_bar
+                and res.get("entryHours", False)
+                and cooldown_ok
+                and res.get("buySetup", False)
+            )
+
+            if can_enter:
+                is_active = True
+                bought_bar = bar_index
+                entry = res["close"]
+                stop = res["candidateStop"]
+                target = res["target"]
+
+                color = "#d946ef" if opt_type == "PE" else "#089981"
+                markers.append({
+                    "time": time_val,
+                    "position": "belowBar",
+                    "shape": "arrowUp",
+                    "color": color,
+                    "text": f"BUY {opt_type}",
+                    "details": f"BUY {opt_type} @ ₹{entry:.2f} | SL: ₹{stop:.2f} | Target: ₹{target:.2f}"
+                })
+
+        # Real bot execution fills from database
+        try:
+            closed_trades = db.get_closed_trades(limit=100)
+            for t in closed_trades:
+                if str(t.get("token")) == token_str:
+                    e_time = t.get("entry_time")
+                    if e_time:
+                        try:
+                            e_dt = datetime.fromisoformat(e_time)
+                            e_bucket = self.candle_builder.calculate_bucket_start(e_dt)
+                            markers.append({
+                                "time": int(e_bucket.timestamp()) + 19800,
+                                "position": "belowBar",
+                                "shape": "circle",
+                                "color": "#000000",
+                                "text": "BOT BUY",
+                                "details": f"BOT BOUGHT @ ₹{float(t['entry_price']):.2f} (Qty: {t['quantity']})"
+                            })
+                        except Exception:
+                            pass
+                    x_time = t.get("exit_time")
+                    if x_time:
+                        try:
+                            x_dt = datetime.fromisoformat(x_time)
+                            x_bucket = self.candle_builder.calculate_bucket_start(x_dt)
+                            pnl = float(t.get("net_pnl", 0.0))
+                            pnl_str = f"+₹{pnl:.1f}" if pnl >= 0 else f"-₹{abs(pnl):.1f}"
+                            markers.append({
+                                "time": int(x_bucket.timestamp()) + 19800,
+                                "position": "aboveBar",
+                                "shape": "circle",
+                                "color": "#000000",
+                                "text": "BOT SOLD",
+                                "details": f"BOT SOLD @ ₹{float(t['exit_price']):.2f} (Net: {pnl_str})"
+                            })
+                        except Exception:
+                            pass
+
+            active_t = self.active_trade
+            if active_t and str(active_t.get("token")) == token_str:
+                e_time = active_t.get("entry_time")
+                if e_time:
+                    try:
+                        e_dt = datetime.fromisoformat(e_time)
+                        e_bucket = self.candle_builder.calculate_bucket_start(e_dt)
+                        markers.append({
+                            "time": int(e_bucket.timestamp()) + 19800,
+                            "position": "belowBar",
+                            "shape": "circle",
+                            "color": "#000000",
+                            "text": "BOT BUY (ACTIVE)",
+                            "details": f"BOT BOUGHT @ ₹{float(active_t['entry_price']):.2f} (Qty: {active_t.get('quantity', 0)})"
+                        })
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Error fetching trade markers from DB: {e}")
+
+        # Deduplicate and sort chronologically
+        markers.sort(key=lambda m: m["time"])
+        return markers

@@ -101,9 +101,11 @@ class PaperTradingEngine:
         best_ask = tick.get("best_ask", 0.0)
         ltp = tick.get("ltp", 0.0)
 
-        # Realistic fill: Best Ask or LTP + slippage
-        if best_ask > 0 and abs(best_ask - ltp) / ltp < 0.10:
-            fill_price = best_ask
+        # Realistic fill:
+        # If real best_ask > ltp is present, buy at best_ask.
+        # Otherwise (depth missing or equal to LTP), apply realistic slippage (ltp + SLIPPAGE_POINTS).
+        if best_ask > ltp and ((best_ask - ltp) / ltp) < 0.10:
+            fill_price = round(best_ask, 2)
         else:
             fill_price = round(ltp + settings.SLIPPAGE_POINTS, 2)
 
@@ -174,9 +176,11 @@ class PaperTradingEngine:
         best_bid = tick.get("best_bid", 0.0)
         ltp = tick.get("ltp", 0.0)
 
-        # Realistic fill: Best Bid or LTP - slippage
-        if best_bid > 0 and abs(best_bid - ltp) / ltp < 0.10:
-            fill_price = best_bid
+        # Realistic fill:
+        # If real best_bid < ltp is present, sell at best_bid.
+        # Otherwise (depth missing or equal to LTP), apply realistic slippage (ltp - SLIPPAGE_POINTS).
+        if 0 < best_bid < ltp and ((ltp - best_bid) / ltp) < 0.10:
+            fill_price = round(best_bid, 2)
         else:
             fill_price = max(0.05, round(ltp - settings.SLIPPAGE_POINTS, 2))
 
