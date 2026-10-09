@@ -2,41 +2,87 @@
 setlocal enabledelayedexpansion
 title NiftyTrades Automated Trading System
 
-echo ======================================================================
-echo   NiftyTrades: Starting on Local Machine
-echo ======================================================================
+:: Always change directory to the folder containing this batch script
+cd /d "%~dp0"
 
-REM Check Python
+echo ======================================================================
+echo   NiftyTrades: Starting Automated Trading System
+echo ======================================================================
+echo.
+
+:: 1. Detect Python command (python or py launcher)
+set "PY_CMD="
 where python >nul 2>nul
-if %errorlevel% neq 0 (
-    echo [ERROR] Python is not found in PATH!
-    echo Please install Python 3.10+ from https://python.org and check "Add Python to PATH".
+if %errorlevel% equ 0 (
+    set "PY_CMD=python"
+) else (
+    where py >nul 2>nul
+    if %errorlevel% equ 0 (
+        set "PY_CMD=py"
+    )
+)
+
+if "%PY_CMD%"=="" (
+    echo ======================================================================
+    echo [ERROR] Python is NOT installed or NOT added to PATH on this laptop!
+    echo ======================================================================
+    echo Python 3.10+ is required to run NiftyTrades.
+    echo.
+    echo Quick fix (takes 2 minutes):
+    echo 1. Download Python: https://www.python.org/downloads/
+    echo 2. Run installer and CHECK the box: "Add python.exe to PATH"
+    echo 3. Finish installation, then double-click run.bat again.
+    echo ======================================================================
+    echo.
     pause
     exit /b 1
 )
 
-REM Check or create virtual environment
+echo [OK] Python found:
+%PY_CMD% --version
+echo.
+
+:: 2. Check if running inside unextracted zip
+if not exist "main.py" (
+    echo ======================================================================
+    echo [ERROR] main.py not found in the current directory!
+    echo.
+    echo If you downloaded a ZIP file from GitHub, please:
+    echo 1. Right-click the ZIP file.
+    echo 2. Select "Extract All...".
+    echo 3. Open the extracted folder and double-click run.bat there.
+    echo ======================================================================
+    echo.
+    pause
+    exit /b 1
+)
+
+:: 3. Setup Virtual Environment
 if not exist "venv\Scripts\activate.bat" (
-    echo [SETUP] Creating Python virtual environment (venv)...
-    python -m venv venv
+    echo [SETUP 1/2] Creating virtual environment (venv)... This takes ~15 seconds.
+    %PY_CMD% -m venv venv
     if %errorlevel% neq 0 (
-        echo [ERROR] Failed to create virtual environment.
-        pause
-        exit /b 1
+        echo [WARNING] Could not create venv. Will use global python.
     )
 )
 
-echo [SETUP] Activating virtual environment...
-call venv\Scripts\activate.bat
+if exist "venv\Scripts\activate.bat" (
+    call venv\Scripts\activate.bat
+    set "RUNNER=python"
+) else (
+    set "RUNNER=%PY_CMD%"
+)
 
-echo [SETUP] Checking and installing dependencies...
-pip install -r requirements.txt --quiet
+:: 4. Install Dependencies
+echo [SETUP 2/2] Checking dependencies...
+%RUNNER% -m pip install -r requirements.txt
 
-REM Check if .env exists
+:: 5. Check .env
 if not exist ".env" (
     echo.
     echo ======================================================================
-    echo [NOTICE] .env file not found! Please create .env with your credentials:
+    echo [WARNING] .env file not found!
+    echo Please make sure you have created .env with your Angel One credentials:
     echo ANGEL_API_KEY=...
     echo ANGEL_CLIENT_CODE=...
     echo ANGEL_PIN=...
@@ -45,8 +91,14 @@ if not exist ".env" (
     echo.
 )
 
-echo [START] Launching NiftyTrades server...
+:: 6. Launch Server
 echo.
-python main.py --host 0.0.0.0 --port 8000
+echo ======================================================================
+echo   [START] Launching NiftyTrades Server...
+echo ======================================================================
+echo.
+%RUNNER% main.py --host 0.0.0.0 --port 8000
 
+echo.
+echo [INFO] Server stopped.
 pause
